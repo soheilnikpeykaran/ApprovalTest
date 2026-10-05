@@ -1,20 +1,43 @@
-using Approval.Domain.Entities;
 using Approval.Application.Contracts;
+using Approval.Domain.Entities;
 
 namespace Approval.Application.Interfaces;
 
 public interface IRepository<T> where T : class
 {
+    IQueryable<T> Query();
     Task<T?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task AddAsync(T entity, CancellationToken cancellationToken = default);
     void Update(T entity);
-    IQueryable<T> Query();
-    Task<List<T>> ToListAsync(IQueryable<T> query, CancellationToken cancellationToken = default);
+}
+
+public interface IRequestRepository
+{
+    Task<IReadOnlyList<Request>> GetVisibleAsync(Guid userId, IReadOnlyCollection<string> roles, CancellationToken cancellationToken = default);
 }
 
 public interface IUnitOfWork
 {
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IUserRepository
+{
+    Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
+    Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default);
+    Task AddAsync(User user, CancellationToken cancellationToken = default);
+}
+
+public interface IPasswordHasher
+{
+    string Hash(string password);
+    bool Verify(string password, string passwordHash);
+}
+
+public interface IJwtTokenService
+{
+    Task<(string Token, DateTime ExpiresAt)> CreateTokenAsync(User user, CancellationToken cancellationToken = default);
 }
 
 public interface IIdentityService

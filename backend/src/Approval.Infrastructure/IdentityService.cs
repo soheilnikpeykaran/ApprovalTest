@@ -1,53 +1,53 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 using Approval.Application.Contracts;
 using Approval.Application.Interfaces;
-using Approval.Infrastructure.Identity;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.Extensions.Configuration;
-using Microsoft.IdentityModel.Tokens;
+using Approval.Domain.Entities;
 
 namespace Approval.Infrastructure.Services;
 
-public sealed class IdentityService(UserManager<ApplicationUser> userManager, IConfiguration configuration) : IIdentityService
+public sealed class IdentityService(
+    IUserRepository userRepository,
+    IPasswordHasher passwordHasher,
+    IJwtTokenService jwtTokenService,
+    IUnitOfWork unitOfWork) : IIdentityService
 {
     public async Task<AuthResult?> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
-        var user = new ApplicationUser { UserName = request.Email, Email = request.Email, FirstName = request.FirstName, LastName = request.LastName };
-        var result = await userManager.CreateAsync(user, request.Password);
-        if (!result.Succeeded) return null;
-        await userManager.AddToRoleAsync(user, "Employee");
-        return await CreateAuthResult(user);
+        var email = request.Email.Trim().ToLowerInvariant();
+        if (await userRepository.ExistsByEmailAsync(email, cancellationToken)) return null;
+
+        var role = new Role { Id = Guid.NewGuid(), Name = "Employee" };
+        var user = new User
+        {
+            Id = Guid.NewGuid(), Email = email,
+            PasswordHash = passwordHasher.Hash(request.Password),
+            FirstName = request.FirstName.Trim(), LastName = request.LastName.Trim(),
+            IsActive = true, CreatedAt = DateTime.UtcNow
+        };
+        user.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id, User = user, Role = role });
+        await userRepository.AddAsync(user, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return await CreateAuthResult(user, cancellationToken);
     }
 
     public async Task<AuthResult?> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByEmailAsync(request.Email);
-        if (user is null || !await userManager.CheckPasswordAsync(user, request.Password)) return null;
-        return await CreateAuthResult(user);
+        var user = await userRepository.GetByEmailAsync(request.Email, cancellationToken);
+        if (user is null || !user.IsActive) return null;
+        if (!passwordHasher.Verify(request.Password, user.PasswordHash)) return null;
+        return await CreateAuthResult(user, cancellationToken);
     }
 
     public async Task<string[]> GetRolesAsync(string userId, CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByIdAsync(userId) ?? throw new InvalidOperationException("User not found.");
-        return (await userManager.GetRolesAsync(user)).ToArray();
+        if (!Guid.TryParse(userId, out var id)) throw new InvalidOperationException("Invalid user id.");
+        var user = await userRepository.GetByIdAsync(id, cancellationToken) ?? throw new InvalidOperationException("User not found.");
+        return user.UserRoles.Select(x => x.Role.Name).ToArray();
     }
 
-    private async Task<AuthResult> CreateAuthResult(ApplicationUser user)
+    private async Task<AuthResult> CreateAuthResult(User user, CancellationToken cancellationToken)
     {
-        var roles = (await userManager.GetRolesAsync(user)).ToArray();
-        var expirationHours = int.TryParse(configuration["Jwt:ExpirationHours"], out var configuredHours) ? configuredHours : 2;
-        var expiresAt = DateTime.UtcNow.AddHours(expirationHours);
-        var claims = new List<Claim>
-        {
-            new(JwtRegisteredClaimNames.Sub, user.Id), new(ClaimTypes.NameIdentifier, user.Id),
-            new(ClaimTypes.Email, user.Email ?? string.Empty), new(ClaimTypes.Name, user.UserName ?? string.Empty)
-        };
-        claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]!));
-        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-        var token = new JwtSecurityToken(configuration["Jwt:Issuer"], configuration["Jwt:Audience"], claims, expires: expiresAt, signingCredentials: credentials);
-        return new AuthResult(user.Id, roles, new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
+        var roles = user.UserRoles.Select(x => x.Role.Name).ToArray();
+        var token = await jwtTokenService.CreateTokenAsync(user, cancellationToken);
+        return new AuthResult(user.Id.ToString(), roles, token.Token, token.ExpiresAt);
     }
 }

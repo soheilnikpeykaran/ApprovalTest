@@ -1,5 +1,7 @@
-using Approval.Infrastructure.Identity;
-using Microsoft.AspNetCore.Identity;
+using Approval.Application.Interfaces;
+using Approval.Domain.Entities;
+using Approval.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Approval.Infrastructure;
@@ -8,99 +10,23 @@ public static class SeedData
 {
     public static async Task InitializeAsync(IServiceProvider services)
     {
-        var roleManager =
-            services.GetRequiredService<RoleManager<IdentityRole>>();
-
-        var userManager =
-            services.GetRequiredService<UserManager<ApplicationUser>>();
-
-        foreach (var role in new[] { "Employee", "Manager", "Finance" })
-        {
-            if (!await roleManager.RoleExistsAsync(role))
-            {
-                var result = await roleManager.CreateAsync(
-                    new IdentityRole(role));
-
-                if (!result.Succeeded)
-                {
-                    throw new InvalidOperationException(
-                        string.Join(
-                            "; ",
-                            result.Errors.Select(x => x.Description)));
-                }
-            }
-        }
-
-        await EnsureUser(
-            userManager,
-            "employee@test.com",
-            "Employee123!",
-            "Test",
-            "Employee",
-            "Employee");
-
-        await EnsureUser(
-            userManager,
-            "manager@test.com",
-            "Manager123!",
-            "Test",
-            "Manager",
-            "Manager");
-
-        await EnsureUser(
-            userManager,
-            "finance@test.com",
-            "Finance123!",
-            "Test",
-            "Finance",
-            "Finance");
+        var db = services.GetRequiredService<ApplicationDbContext>();
+        var hasher = services.GetRequiredService<IPasswordHasher>();
+        await db.Database.MigrateAsync();
+        foreach (var name in new[] { "Employee", "Manager", "Finance" })
+            if (!await db.Roles.AnyAsync(x => x.Name == name)) db.Roles.Add(new Role { Id = Guid.NewGuid(), Name = name });
+        await db.SaveChangesAsync();
+        await CreateUser(db, hasher, "employee@test.com", "Employee123!", "Employee");
+        await CreateUser(db, hasher, "manager@test.com", "Manager123!", "Manager");
+        await CreateUser(db, hasher, "finance@test.com", "Finance123!", "Finance");
+        await db.SaveChangesAsync();
     }
-
-    private static async Task EnsureUser(
-        UserManager<ApplicationUser> userManager,
-        string email,
-        string password,
-        string first,
-        string last,
-        string role)
+    private static async Task CreateUser(ApplicationDbContext db, IPasswordHasher hasher, string email, string password, string roleName)
     {
-        var user = await userManager.FindByEmailAsync(email);
-
-        if (user is null)
-        {
-            user = new ApplicationUser
-            {
-                UserName = email,
-                Email = email,
-                FirstName = first,
-                LastName = last,
-                EmailConfirmed = true
-            };
-
-            var result =
-                await userManager.CreateAsync(user, password);
-
-            if (!result.Succeeded)
-            {
-                throw new InvalidOperationException(
-                    string.Join(
-                        "; ",
-                        result.Errors.Select(x => x.Description)));
-            }
-        }
-
-        if (!await userManager.IsInRoleAsync(user, role))
-        {
-            var result =
-                await userManager.AddToRoleAsync(user, role);
-
-            if (!result.Succeeded)
-            {
-                throw new InvalidOperationException(
-                    string.Join(
-                        "; ",
-                        result.Errors.Select(x => x.Description)));
-            }
-        }
+        if (await db.Users.AnyAsync(x => x.Email == email)) return;
+        var role = await db.Roles.SingleAsync(x => x.Name == roleName);
+        var user = new User { Id = Guid.NewGuid(), Email = email, PasswordHash = hasher.Hash(password), FirstName = roleName, LastName = "Test", IsActive = true, CreatedAt = DateTime.UtcNow };
+        user.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id, User = user, Role = role });
+        db.Users.Add(user);
     }
 }

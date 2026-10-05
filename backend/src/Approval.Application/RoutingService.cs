@@ -8,6 +8,8 @@ public sealed class RoutingService(IOptions<ApprovalRoutingOptions> options) : I
 {
     private readonly ApprovalRoutingOptions _options = options.Value;
 
-    public string ResolveAssignedRole(decimal amount) =>
-        amount <= _options.AmountThreshold ? "Manager" : "Finance";
+    public string ResolveAssignedRole(decimal amount)
+    {
+        return amount <= _options.AmountThreshold ? "Manager" : "Finance";
+    }
 }

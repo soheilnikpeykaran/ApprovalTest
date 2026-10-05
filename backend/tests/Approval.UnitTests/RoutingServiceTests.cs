@@ -2,6 +2,7 @@ using Approval.Application.Options;
 using Approval.Application.Services;
 using Microsoft.Extensions.Options;
 using Xunit;
+
 namespace Approval.UnitTests;
 
 public sealed class RoutingServiceTests
